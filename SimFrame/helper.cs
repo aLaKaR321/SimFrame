@@ -31,7 +31,7 @@ namespace SimFrame
                 CritMultiplier = 2,
                 BaseDamage = 300,
                 StatusChance = 0.5,
-                //Multishot = 0.9,
+                Multishot = 0.9,
                 CurrentMagazine = 2
             };
             weaponStats.DamageDictionary.Add("Slash", 100);
@@ -48,11 +48,17 @@ namespace SimFrame
             var weaponStats = getWeaponStats();
             
             List<Simulation> test = new List<Simulation>();
+            DateTime start = DateTime.Now;
             for (int i = 0; i < 10000; i++)
             {
                 test.Add(new Simulation(getEnemy(), getWeaponStats()));
             }
+            DateTime doneWithInit = DateTime.Now;
             test.AsParallel().ForAll(x => x.Execute());
+            DateTime endTime = DateTime.Now;
+            var initTime = doneWithInit - start;
+            var executeTime = endTime - doneWithInit;
+            var totalTime = initTime + executeTime;
             //var sim = new Simulation(enemy, weaponStats);
             //sim.Execute();
             //var testResult = GetDamageModel(weaponStats, enemy);

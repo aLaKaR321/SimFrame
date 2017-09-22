@@ -22,68 +22,68 @@ namespace SimFrame
             Armor = new Armor(armorType, baseLevel, currentLevel, baseArmor);
         }
 
-        public List<SimEvent> simShot(WeaponStats weaponStats, double activationTime, List<SimEvent> currentEvents)
+        public List<SimEvent> simShot(double activationTime, Simulation simulation, bool isMultishot = false)
         {
             List<SimEvent> eventList = new List<SimEvent>();
-            var critMultiplier = weaponStats.simCritMultiplier();
-            bool statusProcced = weaponStats.simStatusChance();
+            var critMultiplier = simulation._weaponStats.simCritMultiplier();
+            bool statusProcced = simulation._weaponStats.simStatusChance();
             string statusEffect = "";
-            bool multishot = weaponStats.simMultishot();
-            if (multishot)
+            bool multishot = simulation._weaponStats.simMultishot();
+            if (multishot && !isMultishot)
             {
-                eventList.Add(new SimShot(activationTime, this, currentEvents, weaponStats));
+                eventList.Add(new SimShot(activationTime, simulation, true));
             }
             if (statusProcced)
             {
-                statusEffect = weaponStats.simStatusProc();
+                statusEffect = simulation._weaponStats.simStatusProc();
                 if(statusEffect == "Corrosive") //Corrosive First 
                 {
-                    eventList.AddRange(simNewProc(weaponStats, activationTime, statusEffect, critMultiplier, currentEvents));
+                    eventList.AddRange(simNewProc(simulation, activationTime, statusEffect, critMultiplier));
                 }
             }
-            simWeaponDamage(weaponStats, critMultiplier);
+            var sim = simWeaponDamage(simulation, critMultiplier, activationTime);
             if (statusProcced && statusEffect != "Corrosive") //Viral Magnetic and others after
             {
-                eventList.AddRange(simNewProc(weaponStats, activationTime, statusEffect, critMultiplier, currentEvents));
+                eventList.AddRange(simNewProc(simulation, activationTime, statusEffect, critMultiplier));
             }
             
             return eventList;
         }
 
-        private List<SimProc> simNewProc(WeaponStats weaponStats, double activationTime, string statusEffect, double critMultiplier, List<SimEvent> currentEvents)
+        private List<SimProc> simNewProc(Simulation simulation, double activationTime, string statusEffect, double critMultiplier)
         {
             List<SimProc> procList = new List<SimProc>();
             switch (statusEffect)
             {
                 case "Corrosive":
                     Armor.CurrentAmount *= 0.75;
-                    procList.Add(new SimProc(activationTime + 8, this, currentEvents, "Corrosive"));
+                    procList.Add(new SimProc(activationTime + 8, simulation, "Corrosive"));
                     break;
                 case "Viral":
-                    bool alreadyActive = (currentEvents.Count(x => x.GetType() == typeof(SimProc) && (x as SimProc)._statusType == "Viral") > 0);
+                    bool alreadyActive = (simulation._eventList.Count(x => x.GetType() == typeof(SimProc) && (x as SimProc)._statusType == "Viral") > 0);
                     if (!alreadyActive)
                     {
                         Health.CurrentAmount *= 0.5;
                     }
-                    procList.Add(new SimProc(activationTime + 8, this, currentEvents, "Viral"));
+                    procList.Add(new SimProc(activationTime + 8, simulation, "Viral"));
                     break;
                 case "Toxin":
                     for(int i = 0; i<9; i++)
                     {
-                        procList.Add(new DamageProc(activationTime + i, this, currentEvents, "Toxin", ( weaponStats.BaseDamage + weaponStats.DamageDictionary["Toxin"] ) / 2 * critMultiplier));
+                        procList.Add(new DamageProc(activationTime + i, simulation, "Toxin", (simulation._weaponStats.BaseDamage + simulation._weaponStats.DamageDictionary["Toxin"] ) / 2 * critMultiplier));
                     }
                     break;
                 case "Slash":
                     for (int i = 0; i < 7; i++)
                     {
-                        procList.Add(new DamageProc(activationTime + i, this, currentEvents, "Finisher", weaponStats.BaseDamage * 0.35 * critMultiplier));
+                        procList.Add(new DamageProc(activationTime + i, simulation, "Finisher", simulation._weaponStats.BaseDamage * 0.35 * critMultiplier));
                     }
                     break;
                 case "Heat":
-                    currentEvents.RemoveAll(x => x.GetType() == typeof(SimProc) && (x as SimProc)._statusType == "Heat");
+                    simulation._eventList.RemoveAll(x => x.GetType() == typeof(SimProc) && (x as SimProc)._statusType == "Heat");
                     for (int i = 0; i < 7; i++)
                     {
-                        procList.Add(new DamageProc(activationTime + i, this, currentEvents, "Heat", (weaponStats.BaseDamage + weaponStats.DamageDictionary["Heat"]) / 2 * critMultiplier));
+                        procList.Add(new DamageProc(activationTime + i, simulation, "Heat", (simulation._weaponStats.BaseDamage + simulation._weaponStats.DamageDictionary["Heat"]) / 2 * critMultiplier));
                     }
                     break;
                 default:
@@ -92,15 +92,23 @@ namespace SimFrame
             return procList;
         }
 
-        private double simWeaponDamage(WeaponStats weaponStats, double critMultiplier)
+        internal List<SimHistoryEvent> simProc(double tickDamage, string statusType, double activationTime)
         {
-            double sum = 0;
-            foreach (KeyValuePair<string, double> kvp in weaponStats.DamageDictionary)
+            var list = new List<SimHistoryEvent>();
+            list.Add(simDamage(statusType, tickDamage, activationTime));
+            return list;
+        }
+
+        private List<SimHistoryEvent> simWeaponDamage(Simulation simulation, double critMultiplier, double activationTime)
+        {
+            List<SimHistoryEvent> list = new List<SimHistoryEvent>();
+            foreach (KeyValuePair<string, double> kvp in simulation._weaponStats.DamageDictionary)
             {
                 var dmg = kvp.Value * critMultiplier;
-                sum += calculateDamage(kvp.Key, dmg);
+                list.Add(simDamage(kvp.Key, dmg, activationTime));
             }
-            return sum;
+            simulation._damageHistory.AddRange(list);
+            return list;
         }
         public double calculateShot(WeaponStats weaponStats)
         {
@@ -198,6 +206,20 @@ namespace SimFrame
                 sum += initialDamage;
             }
             return sum;
+        }
+        private SimHistoryEvent simDamage(string damageType, double damageValue, double activationTime)
+        {
+            double remainingHealthDamage = 1;
+            if (this.Armor != null && damageType != "Finisher")
+            {
+                double netArmor = this.Armor.CurrentAmount * (1 - DataHelper.DamageTypeDictionary[damageType][this.Armor.Type]);
+                remainingHealthDamage = 1 - netArmor / (300 + netArmor);
+            }
+            var modifier = DataHelper.DamageTypeDictionary[damageType][this.Health.Type];
+            var damage = (1 + modifier) * damageValue * remainingHealthDamage;
+            this.Health.CurrentAmount -= damage;
+            var simHistoryEvent = new SimHistoryEvent(activationTime, damageType, "Health", damage, remainingHealthDamage);
+            return simHistoryEvent;
         }
         private double calculateDamage(string damageType, double damageValue)
         {

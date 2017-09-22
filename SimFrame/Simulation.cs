@@ -1,22 +1,30 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using System.Windows.Controls.DataVisualization.Charting;
+using System.Windows.Forms;
 
 namespace SimFrame
 {
     class Simulation
     {
-        private Enemy Enemy;
-        private List<SimEvent> _eventList;
-        private List<SimEvent> _eventHistory;
+        public Enemy Enemy;
+        public WeaponStats _weaponStats;
+        public List<SimEvent> _eventList;
+        public List<SimEvent> _eventHistory;
+        public List<SimHistoryEvent> _damageHistory;
+
         public Simulation(Enemy enemy, WeaponStats weaponStats)
         {
             Enemy = enemy;
+            _weaponStats = weaponStats;
             _eventList = new List<SimEvent>();
             _eventHistory = new List<SimEvent>();
-            _eventList.Add(new SimShot(0, enemy, _eventList, weaponStats));
+            _damageHistory = new List<SimHistoryEvent>();
+            _eventList.Add(new SimShot(0, this));
         }
         
         public void Execute()
@@ -28,10 +36,41 @@ namespace SimFrame
                 _eventHistory.Add(currentEvent);
                 _eventList.Remove(currentEvent);
                 _eventList = _eventList.OrderBy(x=>x._activationTime).ToList();
-                Console.WriteLine();
             }
         }
     }
+
+    class SimulationSeries : ISeries
+    {
+        private List<Simulation> list;
+        public SimulationSeries(List<Simulation> list)
+        {
+
+        }
+
+        public ObservableCollection<object> LegendItems => throw new NotImplementedException();
+
+        public ISeriesHost SeriesHost { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
+    }
+
+    internal class SimHistoryEvent
+    {
+        public double activationTime;
+        public string damageType;
+        public string damageTo;
+        public double damageDone;
+        public double damageReduction;
+
+        public SimHistoryEvent(double activationTime, string damageType, string damageTo, double damageDone, double damageReduction)
+        {
+            this.activationTime = activationTime;
+            this.damageType = damageType;
+            this.damageTo = damageTo;
+            this.damageDone = damageDone;
+            this.damageReduction = damageReduction;
+        }
+    }
+
     interface ISimEventInterface
     {
         List<SimEvent> Process();
@@ -39,14 +78,12 @@ namespace SimFrame
     abstract class SimEvent : IComparer<SimEvent> , ISimEventInterface
     {
         public double _activationTime;
-        public Enemy _enemy;
-        public List<SimEvent> _currentEvents;
+        public Simulation _simulation;
 
-        public SimEvent(double activationTime, Enemy enemy, List<SimEvent> currentEvents)
+        public SimEvent(double activationTime, Simulation simulation)
         {
             _activationTime = activationTime;
-            _enemy = enemy;
-            _currentEvents = currentEvents;
+            _simulation = simulation;
         }
 
         public int Compare(SimEvent x, SimEvent y)
@@ -59,8 +96,8 @@ namespace SimFrame
     {
         public string _statusType;
 
-        public SimProc(double activationTime, Enemy enemy, List<SimEvent> currentEvents, string statusType)
-            : base(activationTime, enemy, currentEvents)
+        public SimProc(double activationTime, Simulation simulation, string statusType)
+            : base(activationTime, simulation)
         {
             _statusType = statusType;
         }
@@ -70,10 +107,10 @@ namespace SimFrame
             switch (_statusType)
             {
                 case "Corrosive":
-                    _enemy.Armor.CurrentAmount *= (1 / 0.75);
+                    _simulation.Enemy.Armor.CurrentAmount *= (1 / 0.75);
                     break;
                 case "Viral":
-                    _enemy.Health.CurrentAmount *= (1 / 0.5);
+                    _simulation.Enemy.Health.CurrentAmount *= (1 / 0.5);
                     break;
                 //case "Magnetic":
                 //    _enemy.Armor.CurrentAmount *= (1 / 0.75);
@@ -88,57 +125,55 @@ namespace SimFrame
     {
         public double _tickDamage;
 
-        public DamageProc(double activationTime, Enemy enemy, List<SimEvent> currentEvents, string statusType, double tickDamage)
-            : base(activationTime, enemy, currentEvents, statusType)
+        public DamageProc(double activationTime, Simulation simulation, string statusType, double tickDamage)
+            : base(activationTime, simulation, statusType)
         {
             _tickDamage = tickDamage;
         }
+
+        public override List<SimEvent> Process()
+        {
+            List<SimHistoryEvent> list = _simulation.Enemy.simProc(_tickDamage, _statusType, _activationTime);
+            _simulation._damageHistory.AddRange(list);
+            return new List<SimEvent>();
+        }
+        
     }
     class SimShot : SimEvent
     {
-        private WeaponStats _weaponStats;
-
-        public SimShot(double activationTime, Enemy enemy, List<SimEvent> currentEvents, WeaponStats weaponStats)
-            : base(activationTime, enemy, currentEvents)
+        public bool _isMultishot;
+        public SimShot(double activationTime, Simulation simulation, bool isMultishot = false)
+            : base(activationTime, simulation)
         {
-            _weaponStats = weaponStats;
+            _isMultishot = isMultishot;
         }
 
         override public List<SimEvent> Process()
         {
             var simList = new List<SimEvent>();
-            simList.AddRange(_enemy.simShot(_weaponStats, _activationTime, _currentEvents));
-            _weaponStats.CurrentMagazine--;
-            if (_weaponStats.CurrentMagazine > 0)
+            simList.AddRange(_simulation.Enemy.simShot(_activationTime, _simulation, _isMultishot));
+            _simulation._weaponStats.CurrentMagazine--;
+            if (_simulation._weaponStats.CurrentMagazine > 0)
             {
-                simList.Add(new SimShot(_activationTime + _weaponStats.getTimeBetweenShots(), _enemy, _currentEvents, _weaponStats));
+                simList.Add(new SimShot(_activationTime + _simulation._weaponStats.getTimeBetweenShots(), _simulation));
             }
             else
             {
-                simList.Add(new SimShot(_activationTime + _weaponStats.ReloadTime, _enemy, _currentEvents, _weaponStats));
-
-                //simList.Add(new SimReload(_activationTime, _enemy, _currentEvents, _weaponStats));
+                simList.Add(new SimShot(_activationTime + _simulation._weaponStats.ReloadTime, _simulation));
             }
             return simList;
         }
     }
-    //class SimReload : SimEvent
-    //{
-    //    private WeaponStats _weaponStats;
+    class ReportForm : Form
+    {
+        public ReportForm(List<Simulation> simList)
+        {
+            Chart chart = new Chart();
 
-    //    public SimReload(double activationTime, Enemy enemy, List<SimEvent> currentEvents, WeaponStats weaponStats)
-    //        : base(activationTime, enemy, currentEvents)
-    //    {
-    //        _enemy = enemy;
-    //        _weaponStats = weaponStats;
-    //    }
-
-    //    override public List<SimEvent> Process()
-    //    {
-    //        var simList = new List<SimEvent>();
-    //        _weaponStats.CurrentMagazine = _weaponStats.MagazineSize;
-    //        simList.Add(new SimShot(_activationTime, _enemy, _currentEvents, _weaponStats));
-    //        return simList;
-    //    }
-    //}
+            chart.Series.Add();
+            var grid = new FlowLayoutPanel();
+            grid.Controls.Add()
+            this.Controls.Add()
+        }
+    }
 }
